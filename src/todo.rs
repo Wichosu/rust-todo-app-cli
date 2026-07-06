@@ -1,4 +1,4 @@
-use std::{fmt, str::FromStr};
+use std::{error::Error, fmt, str::FromStr};
 
 use rusqlite::{
     ToSql,
@@ -41,7 +41,21 @@ impl Priority {
 }
 
 #[derive(Debug)]
-pub struct ParsePriorityError;
+pub struct ParsePriorityError {
+    input: String,
+}
+
+impl Error for ParsePriorityError {}
+
+impl fmt::Display for ParsePriorityError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "\"{}\" is an Invalid priority (expected: low, medium, high)",
+            self.input
+        )
+    }
+}
 
 impl FromStr for Priority {
     type Err = ParsePriorityError;
@@ -51,7 +65,9 @@ impl FromStr for Priority {
             "low" => Ok(Priority::Low),
             "medium" => Ok(Priority::Medium),
             "high" => Ok(Priority::High),
-            _ => Err(ParsePriorityError),
+            _ => Err(ParsePriorityError {
+                input: s.to_string(),
+            }),
         }
     }
 }

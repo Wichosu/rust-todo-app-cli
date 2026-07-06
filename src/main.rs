@@ -5,19 +5,19 @@ use crate::todo::Priority;
 mod db;
 mod todo;
 
-fn main() {
+fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
 
-    let conn = db::connect().unwrap();
+    let conn = db::connect()?;
 
     if args.len() < 2 {
         println!("Usage: todo <command>");
-        return;
+        return Ok(());
     }
 
     match args[1].as_str() {
         "list" => {
-            let todos = db::list_tasks(&conn).unwrap();
+            let todos = db::list_tasks(&conn)?;
 
             println!("List of todos: ");
 
@@ -27,15 +27,13 @@ fn main() {
                     println!(
                         "\tCreated: {}",
                         todo.created_at
-                            .parse::<DateTime<chrono::Utc>>()
-                            .unwrap()
+                            .parse::<DateTime<chrono::Utc>>()?
                             .with_timezone(&Local)
                             .format("%b %d, %Y %H:%M")
                     );
                     if let Some(timestamp) = &todo.completed_at {
                         let dt = timestamp
-                            .parse::<DateTime<chrono::Utc>>()
-                            .unwrap()
+                            .parse::<DateTime<chrono::Utc>>()?
                             .with_timezone(&Local);
                         println!("\tCompleted: {}", dt.format("%b %d, %Y %H:%M"));
                     }
@@ -44,8 +42,7 @@ fn main() {
                     println!(
                         "\tCreated: {}",
                         todo.created_at
-                            .parse::<DateTime<chrono::Utc>>()
-                            .unwrap()
+                            .parse::<DateTime<chrono::Utc>>()?
                             .with_timezone(&Local)
                             .format("%b %d, %Y %H:%M")
                     );
@@ -55,14 +52,14 @@ fn main() {
         "add" => {
             if args.len() < 3 {
                 println!("Usage: todo add <tasks...> [options]");
-                return;
+                return Ok(());
             }
 
             let mut priority = Priority::Medium;
 
             if let Some(index) = args.iter().position(|arg| arg == "--priority") {
                 if let Some(value) = args.get(index + 1) {
-                    priority = value.parse().unwrap();
+                    priority = value.parse()?;
                 }
             }
 
@@ -80,7 +77,7 @@ fn main() {
         "delete" => {
             if args.len() < 3 {
                 println!("Usage: todo delete <index_of_task>");
-                return;
+                return Ok(());
             }
 
             for index in &args[2..] {
@@ -90,7 +87,7 @@ fn main() {
                     } else {
                         println!("Deleted all completed tasks!");
                     }
-                    return;
+                    return Ok(());
                 }
 
                 if let Ok(id) = index.parse::<i64>() {
@@ -107,7 +104,7 @@ fn main() {
         "done" => {
             if args.len() < 3 {
                 println!("Usage: todo done <index_of_task>");
-                return;
+                return Ok(());
             }
 
             for index in &args[2..] {
@@ -125,7 +122,7 @@ fn main() {
         "undone" => {
             if args.len() < 3 {
                 println!("Usage: todo undone <index_of_task>");
-                return;
+                return Ok(());
             }
 
             for index in &args[2..] {
@@ -149,5 +146,13 @@ fn main() {
             println!("undone -> unchecks a task. Usage todo undone <index_of_tasks...>");
         }
         _ => println!("Unknown command. use \"todo help\" to show available commands"),
+    }
+
+    Ok(())
+}
+
+fn main() {
+    if let Err(err) = run() {
+        eprintln!("Error: {}", err);
     }
 }

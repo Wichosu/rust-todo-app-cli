@@ -3,7 +3,7 @@ use crate::todo::Todo;
 use chrono::Utc;
 use rusqlite::{Connection, Result};
 
-pub fn connect() -> Result<Connection> {
+pub fn connect() -> Result<Connection, rusqlite::Error> {
     let conn = Connection::open("todos.db")?;
 
     conn.execute(
