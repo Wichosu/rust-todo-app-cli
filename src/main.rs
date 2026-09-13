@@ -17,7 +17,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     match args[1].as_str() {
         "list" => {
-            let todos = db::list_tasks(&conn)?;
+            let completed = match args.get(2).map(|v| v.as_str()) {
+                Some("--completed") => Some(true),
+                Some("--pending") => Some(false),
+                _ => None,
+            };
+
+            let todos = db::list_tasks(&conn, completed)?;
 
             println!("List of todos: ");
 

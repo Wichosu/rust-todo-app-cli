@@ -1,6 +1,7 @@
 use crate::todo::Priority;
 use crate::todo::Todo;
 use chrono::Utc;
+use rusqlite::types::Value;
 use rusqlite::{Connection, Result};
 
 pub fn connect() -> Result<Connection, rusqlite::Error> {
@@ -58,11 +59,22 @@ pub fn mark_incomplete(conn: &Connection, id: &i64) -> Result<()> {
     Ok(())
 }
 
-pub fn list_tasks(conn: &Connection) -> Result<Vec<Todo>> {
-    let mut stmt =
-        conn.prepare("SELECT id, text, completed, created_at, completed_at, priority FROM todos")?;
+pub fn list_tasks(conn: &Connection, completed: Option<bool>) -> Result<Vec<Todo>> {
+    let sql = match completed {
+        Some(_) => {
+            "SELECT id, text, completed, created_at, completed_at, priority
+             FROM todos
+             WHERE completed = ?1"
+        }
+        None => {
+            "SELECT id, text, completed, created_at, completed_at, priority
+             FROM todos"
+        }
+    };
 
-    let rows = stmt.query_map([], |row| {
+    let mut stmt = conn.prepare(sql)?;
+
+    let rows = stmt.query_map(rusqlite::params_from_iter(completed), |row| {
         Ok(Todo {
             id: row.get(0)?,
             text: row.get(1)?,
