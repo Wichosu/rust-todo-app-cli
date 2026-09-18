@@ -23,7 +23,19 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 _ => None,
             };
 
-            let todos = db::list_tasks(&conn, completed)?;
+            let priority = args
+                .iter()
+                .position(|arg| arg == "--priority")
+                .and_then(|i| args.get(i + 1))
+                .map(|v| v.parse::<Priority>())
+                .transpose()?;
+
+            let completed = match (completed, priority) {
+                (None, Some(_)) => Some(false),
+                _ => completed,
+            };
+
+            let todos = db::list_tasks(&conn, completed, priority)?;
 
             println!("List of todos: ");
 

@@ -1,7 +1,6 @@
 use crate::todo::Priority;
 use crate::todo::Todo;
 use chrono::Utc;
-use rusqlite::types::Value;
 use rusqlite::{Connection, Result};
 
 pub fn connect() -> Result<Connection, rusqlite::Error> {
@@ -59,22 +58,34 @@ pub fn mark_incomplete(conn: &Connection, id: &i64) -> Result<()> {
     Ok(())
 }
 
-pub fn list_tasks(conn: &Connection, completed: Option<bool>) -> Result<Vec<Todo>> {
-    let sql = match completed {
-        Some(_) => {
-            "SELECT id, text, completed, created_at, completed_at, priority
-             FROM todos
-             WHERE completed = ?1"
-        }
-        None => {
-            "SELECT id, text, completed, created_at, completed_at, priority
-             FROM todos"
-        }
-    };
+pub fn list_tasks(
+    conn: &Connection,
+    completed: Option<bool>,
+    priority: Option<Priority>,
+) -> Result<Vec<Todo>> {
+    let mut sql = String::from(
+        "SELECT id, text, completed, created_at, completed_at, priority FROM todos",
+    );
+    let mut conditions = Vec::new();
+    let mut params: Vec<rusqlite::types::Value> = Vec::new();
 
-    let mut stmt = conn.prepare(sql)?;
+    if let Some(c) = completed {
+        conditions.push(format!("completed = ?{}", conditions.len() + 1));
+        params.push(rusqlite::types::Value::Integer(c as i64));
+    }
+    if let Some(p) = priority {
+        conditions.push(format!("priority = ?{}", conditions.len() + 1));
+        params.push(rusqlite::types::Value::Text(p.as_str().to_string()));
+    }
 
-    let rows = stmt.query_map(rusqlite::params_from_iter(completed), |row| {
+    if !conditions.is_empty() {
+        sql.push_str(" WHERE ");
+        sql.push_str(&conditions.join(" AND "));
+    }
+
+    let mut stmt = conn.prepare(&sql)?;
+
+    let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
         Ok(Todo {
             id: row.get(0)?,
             text: row.get(1)?,
