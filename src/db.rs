@@ -66,6 +66,9 @@ pub fn list_tasks(
     completed: Option<bool>,
     priority: Option<Priority>,
     due_date: Option<&str>,
+    overdue_before: Option<&str>,
+    due_before: Option<&str>,
+    due_after: Option<&str>,
 ) -> Result<Vec<Todo>> {
     let mut sql = String::from(
         "SELECT id, text, completed, created_at, completed_at, priority, due_date FROM todos",
@@ -84,6 +87,18 @@ pub fn list_tasks(
     if let Some(d) = due_date {
         conditions.push(format!("due_date = ?{}", conditions.len() + 1));
         params.push(rusqlite::types::Value::Text(d.to_string()));
+    }
+    if let Some(before) = overdue_before {
+        conditions.push(format!("due_date IS NOT NULL AND due_date < ?{}", conditions.len() + 1));
+        params.push(rusqlite::types::Value::Text(before.to_string()));
+    }
+    if let Some(before) = due_before {
+        conditions.push(format!("due_date IS NOT NULL AND due_date < ?{}", conditions.len() + 1));
+        params.push(rusqlite::types::Value::Text(before.to_string()));
+    }
+    if let Some(after) = due_after {
+        conditions.push(format!("due_date IS NOT NULL AND due_date > ?{}", conditions.len() + 1));
+        params.push(rusqlite::types::Value::Text(after.to_string()));
     }
 
     if !conditions.is_empty() {

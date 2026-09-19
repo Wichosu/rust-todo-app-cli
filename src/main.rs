@@ -31,10 +31,24 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .transpose()?;
 
             let due_today = args.iter().any(|arg| arg == "--due-today");
+            let overdue = args.iter().any(|arg| arg == "--overdue");
 
-            let completed = match (completed, priority, due_today) {
-                (None, Some(_), _) => Some(false),
-                (None, _, true) => Some(false),
+            let due_before = args
+                .iter()
+                .position(|arg| arg == "--due-before")
+                .and_then(|i| args.get(i + 1))
+                .map(|s| s.as_str());
+
+            let due_after = args
+                .iter()
+                .position(|arg| arg == "--due-after")
+                .and_then(|i| args.get(i + 1))
+                .map(|s| s.as_str());
+
+            let completed = match (completed, priority, due_today, overdue) {
+                (None, Some(_), _, _) => Some(false),
+                (None, _, true, _) => Some(false),
+                (None, _, _, true) => Some(false),
                 _ => completed,
             };
 
@@ -44,7 +58,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 None
             };
 
-            let todos = db::list_tasks(&conn, completed, priority, due_date.as_deref())?;
+            let overdue_before = if overdue {
+                Some(Local::now().format("%Y-%m-%d").to_string())
+            } else {
+                None
+            };
+
+            let todos = db::list_tasks(&conn, completed, priority, due_date.as_deref(), overdue_before.as_deref(), due_before, due_after)?;
 
             println!("List of todos: ");
 
@@ -178,7 +198,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         "help" => {
             println!("List of commands:");
-            println!("list -> shows the list of current tasks. Options: --completed, --pending, --priority <level>, --due-today");
+            println!("list -> shows the list of current tasks. Options: --completed, --pending, --priority <level>, --due-today, --overdue, --due-before <YYYY-MM-DD>, --due-after <YYYY-MM-DD>");
             println!("add -> adds new tasks. Usage: todo add <tasks...> [--priority low|medium|high] [--due YYYY-MM-DD]");
             println!("delete -> deletes tasks. Usage: todo delete <index_of_tasks...>");
             println!("done -> checks a task. Usage todo done <index_of_tasks...>");
