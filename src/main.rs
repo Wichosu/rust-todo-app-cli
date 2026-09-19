@@ -30,12 +30,21 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .map(|v| v.parse::<Priority>())
                 .transpose()?;
 
-            let completed = match (completed, priority) {
-                (None, Some(_)) => Some(false),
+            let due_today = args.iter().any(|arg| arg == "--due-today");
+
+            let completed = match (completed, priority, due_today) {
+                (None, Some(_), _) => Some(false),
+                (None, _, true) => Some(false),
                 _ => completed,
             };
 
-            let todos = db::list_tasks(&conn, completed, priority)?;
+            let due_date = if due_today {
+                Some(Local::now().format("%Y-%m-%d").to_string())
+            } else {
+                None
+            };
+
+            let todos = db::list_tasks(&conn, completed, priority, due_date.as_deref())?;
 
             println!("List of todos: ");
 
@@ -55,6 +64,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             .with_timezone(&Local);
                         println!("\tCompleted: {}", dt.format("%b %d, %Y %H:%M"));
                     }
+                    if let Some(due) = &todo.due_date {
+                        println!("\tDue: {}", due);
+                    }
                 } else {
                     println!("{:?}.- [{}] {:?}", todo.id, todo.priority, todo.text);
                     println!(
@@ -64,6 +76,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             .with_timezone(&Local)
                             .format("%b %d, %Y %H:%M")
                     );
+                    if let Some(due) = &todo.due_date {
+                        println!("\tDue: {}", due);
+                    }
                 }
             }
         }
@@ -81,12 +96,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
+            let due_date = args
+                .iter()
+                .position(|arg| arg == "--due")
+                .and_then(|i| args.get(i + 1))
+                .map(|s| s.as_str());
+
             for todo in &args[2..] {
                 if todo.starts_with("--") {
                     break;
                 }
 
-                match db::add_task(&conn, &todo.to_string(), priority) {
+                match db::add_task(&conn, &todo.to_string(), priority, due_date) {
                     Ok(()) => println!("Task successfully added!"),
                     Err(_) => println!("Something went wrong!"),
                 }
@@ -157,8 +178,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         "help" => {
             println!("List of commands:");
-            println!("list -> shows the list of current tasks");
-            println!("add -> adds new tasks. Usage: todo add <tasks...> [options]");
+            println!("list -> shows the list of current tasks. Options: --completed, --pending, --priority <level>, --due-today");
+            println!("add -> adds new tasks. Usage: todo add <tasks...> [--priority low|medium|high] [--due YYYY-MM-DD]");
             println!("delete -> deletes tasks. Usage: todo delete <index_of_tasks...>");
             println!("done -> checks a task. Usage todo done <index_of_tasks...>");
             println!("undone -> unchecks a task. Usage todo undone <index_of_tasks...>");

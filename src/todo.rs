@@ -12,6 +12,7 @@ pub struct Todo {
     pub created_at: String,
     pub completed_at: Option<String>,
     pub priority: Priority,
+    pub due_date: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]

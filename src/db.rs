@@ -13,20 +13,23 @@ pub fn connect() -> Result<Connection, rusqlite::Error> {
       completed INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       completed_at TEXT,
-      priority TEXT NOT NULL DEFAULT 'medium'
+      priority TEXT NOT NULL DEFAULT 'medium',
+      due_date TEXT
       )",
         [],
     )?;
 
+    let _ = conn.execute("ALTER TABLE todos ADD COLUMN due_date TEXT", []);
+
     Ok(conn)
 }
 
-pub fn add_task(conn: &Connection, text: &str, priority: Priority) -> Result<()> {
+pub fn add_task(conn: &Connection, text: &str, priority: Priority, due_date: Option<&str>) -> Result<()> {
     let now = Utc::now().to_rfc3339();
 
     conn.execute(
-        "INSERT INTO todos (text, created_at, priority) VALUES (?1, ?2, ?3)",
-        [text, &now, priority.as_str()],
+        "INSERT INTO todos (text, created_at, priority, due_date) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![text, now, priority.as_str(), due_date],
     )?;
     Ok(())
 }
@@ -62,9 +65,10 @@ pub fn list_tasks(
     conn: &Connection,
     completed: Option<bool>,
     priority: Option<Priority>,
+    due_date: Option<&str>,
 ) -> Result<Vec<Todo>> {
     let mut sql = String::from(
-        "SELECT id, text, completed, created_at, completed_at, priority FROM todos",
+        "SELECT id, text, completed, created_at, completed_at, priority, due_date FROM todos",
     );
     let mut conditions = Vec::new();
     let mut params: Vec<rusqlite::types::Value> = Vec::new();
@@ -76,6 +80,10 @@ pub fn list_tasks(
     if let Some(p) = priority {
         conditions.push(format!("priority = ?{}", conditions.len() + 1));
         params.push(rusqlite::types::Value::Text(p.as_str().to_string()));
+    }
+    if let Some(d) = due_date {
+        conditions.push(format!("due_date = ?{}", conditions.len() + 1));
+        params.push(rusqlite::types::Value::Text(d.to_string()));
     }
 
     if !conditions.is_empty() {
@@ -93,6 +101,7 @@ pub fn list_tasks(
             created_at: row.get(3)?,
             completed_at: row.get(4)?,
             priority: row.get(5)?,
+            due_date: row.get(6)?,
         })
     })?;
 
