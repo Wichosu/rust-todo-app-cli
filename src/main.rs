@@ -203,6 +203,86 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             println!("delete -> deletes tasks. Usage: todo delete <index_of_tasks...>");
             println!("done -> checks a task. Usage todo done <index_of_tasks...>");
             println!("undone -> unchecks a task. Usage todo undone <index_of_tasks...>");
+            println!("search -> searches tasks by text. Usage: todo search <query> [--pending|--completed] [--priority <level>] [--due-today] [--overdue]");
+        }
+        "search" => {
+            if args.len() < 3 {
+                println!("Usage: todo search <query> [--pending|--completed] [--priority <level>] [--due-today] [--overdue]");
+                return Ok(());
+            }
+
+            let query = &args[2];
+
+            let completed = match args.iter().position(|arg| arg == "--pending") {
+                Some(_) => Some(false),
+                None => match args.iter().position(|arg| arg == "--completed") {
+                    Some(_) => Some(true),
+                    None => None,
+                },
+            };
+
+            let priority = args
+                .iter()
+                .position(|arg| arg == "--priority")
+                .and_then(|i| args.get(i + 1))
+                .map(|v| v.parse::<Priority>())
+                .transpose()?;
+
+            let due_today = args.iter().any(|arg| arg == "--due-today");
+            let overdue = args.iter().any(|arg| arg == "--overdue");
+
+            let due_date = if due_today {
+                Some(Local::now().format("%Y-%m-%d").to_string())
+            } else {
+                None
+            };
+
+            let overdue_before = if overdue {
+                Some(Local::now().format("%Y-%m-%d").to_string())
+            } else {
+                None
+            };
+
+            let todos = db::search_tasks(&conn, query, completed, priority, due_date.as_deref(), overdue_before.as_deref())?;
+
+            if todos.is_empty() {
+                println!("No tasks found matching \"{}\"", query);
+            } else {
+                println!("Search results for \"{}\":", query);
+                for todo in todos {
+                    if todo.completed {
+                        println!("{:?}.- [X] {:?}", todo.id, todo.text);
+                        println!(
+                            "\tCreated: {}",
+                            todo.created_at
+                                .parse::<DateTime<chrono::Utc>>()?
+                                .with_timezone(&Local)
+                                .format("%b %d, %Y %H:%M")
+                        );
+                        if let Some(timestamp) = &todo.completed_at {
+                            let dt = timestamp
+                                .parse::<DateTime<chrono::Utc>>()?
+                                .with_timezone(&Local);
+                            println!("\tCompleted: {}", dt.format("%b %d, %Y %H:%M"));
+                        }
+                        if let Some(due) = &todo.due_date {
+                            println!("\tDue: {}", due);
+                        }
+                    } else {
+                        println!("{:?}.- [{}] {:?}", todo.id, todo.priority, todo.text);
+                        println!(
+                            "\tCreated: {}",
+                            todo.created_at
+                                .parse::<DateTime<chrono::Utc>>()?
+                                .with_timezone(&Local)
+                                .format("%b %d, %Y %H:%M")
+                        );
+                        if let Some(due) = &todo.due_date {
+                            println!("\tDue: {}", due);
+                        }
+                    }
+                }
+            }
         }
         _ => println!("Unknown command. use \"todo help\" to show available commands"),
     }
