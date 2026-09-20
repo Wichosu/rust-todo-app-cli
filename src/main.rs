@@ -1,9 +1,166 @@
 use chrono::{DateTime, Local};
+use crossterm::{
+    event::{self, Event, KeyCode, KeyEventKind},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use ratatui::{
+    backend::CrosstermBackend,
+    style::{Color, Modifier, Style},
+    widgets::{Block, Borders, List, ListItem, Paragraph},
+    Terminal,
+};
 use std::env;
+use std::io;
+use rusqlite::Connection;
 
 use crate::todo::Priority;
 mod db;
 mod todo;
+
+fn run_ui(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+    let mut todos = db::list_tasks(conn, None, None, None, None, None, None)?;
+
+    todos.sort_by(|a, b| {
+        let sort_key = |t: &crate::todo::Todo| -> u8 {
+            if t.completed {
+                return 3;
+            }
+            match t.priority {
+                Priority::High => 0,
+                Priority::Medium => 1,
+                Priority::Low => 2,
+            }
+        };
+        sort_key(a).cmp(&sort_key(b))
+    });
+
+    let mut selected: usize = 0;
+
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    loop {
+        let todo_count = todos.len();
+
+        terminal.draw(|f| {
+            let area = f.area();
+
+            let block = Block::default()
+                .title("Todo List")
+                .borders(Borders::ALL)
+                .style(Style::default().fg(Color::White));
+
+            let highlight_style = Style::default()
+                .bg(Color::Rgb(40, 40, 60))
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD);
+
+            let items: Vec<ListItem> = todos
+                .iter()
+                .enumerate()
+                .map(|(i, t)| {
+                    let (label, style) = if t.completed {
+                        ("[X]".to_string(), Style::default().fg(Color::DarkGray))
+                    } else {
+                        match t.priority {
+                            Priority::High => (
+                                format!("[H]"),
+                                Style::default().fg(Color::Red),
+                            ),
+                            Priority::Medium => (
+                                format!("[M]"),
+                                Style::default().fg(Color::Yellow),
+                            ),
+                            Priority::Low => (
+                                format!("[L]"),
+                                Style::default().fg(Color::Green),
+                            ),
+                        }
+                    };
+                    let line = format!("{} {}", label, t.text);
+                    let item_style = if i == selected {
+                        highlight_style
+                    } else {
+                        style
+                    };
+                    ListItem::new(line).style(item_style)
+                })
+                .collect();
+
+            let list = List::new(items)
+                .block(block)
+                .highlight_style(highlight_style);
+            f.render_widget(list, area);
+
+            let footer_area = ratatui::layout::Rect {
+                x: area.x + 1,
+                y: area.y + area.height.saturating_sub(2),
+                width: area.width.saturating_sub(2),
+                height: 1,
+            };
+            let footer = Paragraph::new("↑↓ navigate | SPACE toggle | q quit")
+                .style(Style::default().fg(Color::DarkGray))
+                .alignment(ratatui::layout::Alignment::Center);
+            f.render_widget(footer, footer_area);
+        })?;
+
+        if let Event::Key(key) = event::read()? {
+            if key.kind == KeyEventKind::Press {
+                match key.code {
+                    KeyCode::Char('q') => break,
+                    KeyCode::Up => {
+                        if todo_count > 0 && selected > 0 {
+                            selected -= 1;
+                        }
+                    }
+                    KeyCode::Down => {
+                        if todo_count > 0 && selected < todo_count - 1 {
+                            selected += 1;
+                        }
+                    }
+                    KeyCode::Char(' ') => {
+                        if todo_count > 0 {
+                            let todo = &todos[selected];
+                            let id = todo.id;
+                            if todo.completed {
+                                db::mark_incomplete(conn, &id)?;
+                            } else {
+                                db::mark_completed(conn, &id)?;
+                            }
+                            todos = db::list_tasks(conn, None, None, None, None, None, None)?;
+                            todos.sort_by(|a, b| {
+                                let sort_key = |t: &crate::todo::Todo| -> u8 {
+                                    if t.completed {
+                                        return 3;
+                                    }
+                                    match t.priority {
+                                        Priority::High => 0,
+                                        Priority::Medium => 1,
+                                        Priority::Low => 2,
+                                    }
+                                };
+                                sort_key(a).cmp(&sort_key(b))
+                            });
+                            if selected >= todos.len() {
+                                selected = todos.len().saturating_sub(1);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    terminal.show_cursor()?;
+    Ok(())
+}
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
@@ -204,6 +361,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             println!("done -> checks a task. Usage todo done <index_of_tasks...>");
             println!("undone -> unchecks a task. Usage todo undone <index_of_tasks...>");
             println!("search -> searches tasks by text. Usage: todo search <query> [--pending|--completed] [--priority <level>] [--due-today] [--overdue]");
+            println!("ui -> launches the terminal UI");
         }
         "search" => {
             if args.len() < 3 {
@@ -283,6 +441,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
+        }
+        "ui" => {
+            run_ui(&conn)?;
         }
         _ => println!("Unknown command. use \"todo help\" to show available commands"),
     }
