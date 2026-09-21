@@ -6,8 +6,9 @@ use crossterm::{
 };
 use ratatui::{
     backend::CrosstermBackend,
+    layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
     Terminal,
 };
 use std::env;
@@ -18,9 +19,32 @@ use crate::todo::Priority;
 mod db;
 mod todo;
 
-fn run_ui(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
-    let mut todos = db::list_tasks(conn, None, None, None, None, None, None)?;
+enum AppState {
+    Main,
+    AddingTask { input: String },
+}
 
+fn centered_rect(percent_x: u16, height: u16, area: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(ratatui::layout::Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - height) / 2),
+            Constraint::Length(height),
+            Constraint::Percentage((100 - height) / 2),
+        ])
+        .split(area);
+
+    Layout::default()
+        .direction(ratatui::layout::Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
+}
+
+fn sort_todos(todos: &mut Vec<crate::todo::Todo>) {
     todos.sort_by(|a, b| {
         let sort_key = |t: &crate::todo::Todo| -> u8 {
             if t.completed {
@@ -34,8 +58,14 @@ fn run_ui(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
         };
         sort_key(a).cmp(&sort_key(b))
     });
+}
+
+fn run_ui(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+    let mut todos = db::list_tasks(conn, None, None, None, None, None, None)?;
+    sort_todos(&mut todos);
 
     let mut selected: usize = 0;
+    let mut state = AppState::Main;
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -49,108 +79,204 @@ fn run_ui(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
         terminal.draw(|f| {
             let area = f.area();
 
-            let block = Block::default()
-                .title("Todo List")
-                .borders(Borders::ALL)
-                .style(Style::default().fg(Color::White));
+            match &state {
+                AppState::Main => {
+                    let block = Block::default()
+                        .title("Todo List")
+                        .borders(Borders::ALL)
+                        .style(Style::default().fg(Color::White));
 
-            let highlight_style = Style::default()
-                .bg(Color::Rgb(40, 40, 60))
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD);
+                    let highlight_style = Style::default()
+                        .bg(Color::Rgb(40, 40, 60))
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD);
 
-            let items: Vec<ListItem> = todos
-                .iter()
-                .enumerate()
-                .map(|(i, t)| {
-                    let (label, style) = if t.completed {
-                        ("[X]".to_string(), Style::default().fg(Color::DarkGray))
-                    } else {
-                        match t.priority {
-                            Priority::High => (
-                                format!("[H]"),
-                                Style::default().fg(Color::Red),
-                            ),
-                            Priority::Medium => (
-                                format!("[M]"),
-                                Style::default().fg(Color::Yellow),
-                            ),
-                            Priority::Low => (
-                                format!("[L]"),
-                                Style::default().fg(Color::Green),
-                            ),
-                        }
+                    let items: Vec<ListItem> = todos
+                        .iter()
+                        .enumerate()
+                        .map(|(i, t)| {
+                            let (label, style) = if t.completed {
+                                ("[X]".to_string(), Style::default().fg(Color::DarkGray))
+                            } else {
+                                match t.priority {
+                                    Priority::High => (
+                                        format!("[H]"),
+                                        Style::default().fg(Color::Red),
+                                    ),
+                                    Priority::Medium => (
+                                        format!("[M]"),
+                                        Style::default().fg(Color::Yellow),
+                                    ),
+                                    Priority::Low => (
+                                        format!("[L]"),
+                                        Style::default().fg(Color::Green),
+                                    ),
+                                }
+                            };
+                            let line = format!("{} {}", label, t.text);
+                            let item_style = if i == selected {
+                                highlight_style
+                            } else {
+                                style
+                            };
+                            ListItem::new(line).style(item_style)
+                        })
+                        .collect();
+
+                    let list = List::new(items)
+                        .block(block)
+                        .highlight_style(highlight_style);
+                    f.render_widget(list, area);
+
+                    let footer_area = Rect {
+                        x: area.x + 1,
+                        y: area.y + area.height.saturating_sub(2),
+                        width: area.width.saturating_sub(2),
+                        height: 1,
                     };
-                    let line = format!("{} {}", label, t.text);
-                    let item_style = if i == selected {
-                        highlight_style
-                    } else {
-                        style
+                    let footer = Paragraph::new("↑↓ navigate | SPACE toggle | n new | q quit")
+                        .style(Style::default().fg(Color::DarkGray))
+                        .alignment(ratatui::layout::Alignment::Center);
+                    f.render_widget(footer, footer_area);
+                }
+                AppState::AddingTask { input } => {
+                    let block = Block::default()
+                        .title("Todo List")
+                        .borders(Borders::ALL)
+                        .style(Style::default().fg(Color::DarkGray));
+
+                    let highlight_style = Style::default()
+                        .bg(Color::Rgb(40, 40, 60))
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD);
+
+                    let items: Vec<ListItem> = todos
+                        .iter()
+                        .enumerate()
+                        .map(|(i, t)| {
+                            let (label, style) = if t.completed {
+                                ("[X]".to_string(), Style::default().fg(Color::DarkGray))
+                            } else {
+                                match t.priority {
+                                    Priority::High => (
+                                        format!("[H]"),
+                                        Style::default().fg(Color::DarkGray),
+                                    ),
+                                    Priority::Medium => (
+                                        format!("[M]"),
+                                        Style::default().fg(Color::DarkGray),
+                                    ),
+                                    Priority::Low => (
+                                        format!("[L]"),
+                                        Style::default().fg(Color::DarkGray),
+                                    ),
+                                }
+                            };
+                            let line = format!("{} {}", label, t.text);
+                            let item_style = if i == selected {
+                                highlight_style
+                            } else {
+                                style
+                            };
+                            ListItem::new(line).style(item_style)
+                        })
+                        .collect();
+
+                    let list = List::new(items)
+                        .block(block)
+                        .highlight_style(highlight_style);
+                    f.render_widget(list, area);
+
+                    let popup = centered_rect(60, 3, area);
+                    f.render_widget(Clear, popup);
+
+                    let popup_block = Block::default()
+                        .title("New Task")
+                        .borders(Borders::ALL)
+                        .style(Style::default().fg(Color::Cyan));
+                    let input_display = format!("{}▌", input);
+                    let input_paragraph =
+                        Paragraph::new(input_display).block(popup_block);
+                    f.render_widget(input_paragraph, popup);
+
+                    let footer_area = Rect {
+                        x: area.x + 1,
+                        y: area.y + area.height.saturating_sub(2),
+                        width: area.width.saturating_sub(2),
+                        height: 1,
                     };
-                    ListItem::new(line).style(item_style)
-                })
-                .collect();
-
-            let list = List::new(items)
-                .block(block)
-                .highlight_style(highlight_style);
-            f.render_widget(list, area);
-
-            let footer_area = ratatui::layout::Rect {
-                x: area.x + 1,
-                y: area.y + area.height.saturating_sub(2),
-                width: area.width.saturating_sub(2),
-                height: 1,
-            };
-            let footer = Paragraph::new("↑↓ navigate | SPACE toggle | q quit")
-                .style(Style::default().fg(Color::DarkGray))
-                .alignment(ratatui::layout::Alignment::Center);
-            f.render_widget(footer, footer_area);
+                    let footer =
+                        Paragraph::new("Type your task | ENTER confirm | ESC cancel")
+                            .style(Style::default().fg(Color::DarkGray))
+                            .alignment(ratatui::layout::Alignment::Center);
+                    f.render_widget(footer, footer_area);
+                }
+            }
         })?;
 
         if let Event::Key(key) = event::read()? {
             if key.kind == KeyEventKind::Press {
-                match key.code {
-                    KeyCode::Char('q') => break,
-                    KeyCode::Up => {
-                        if todo_count > 0 && selected > 0 {
-                            selected -= 1;
-                        }
-                    }
-                    KeyCode::Down => {
-                        if todo_count > 0 && selected < todo_count - 1 {
-                            selected += 1;
-                        }
-                    }
-                    KeyCode::Char(' ') => {
-                        if todo_count > 0 {
-                            let todo = &todos[selected];
-                            let id = todo.id;
-                            if todo.completed {
-                                db::mark_incomplete(conn, &id)?;
-                            } else {
-                                db::mark_completed(conn, &id)?;
+                match &mut state {
+                    AppState::Main => match key.code {
+                        KeyCode::Char('q') => break,
+                        KeyCode::Up => {
+                            if todo_count > 0 && selected > 0 {
+                                selected -= 1;
                             }
-                            todos = db::list_tasks(conn, None, None, None, None, None, None)?;
-                            todos.sort_by(|a, b| {
-                                let sort_key = |t: &crate::todo::Todo| -> u8 {
-                                    if t.completed {
-                                        return 3;
-                                    }
-                                    match t.priority {
-                                        Priority::High => 0,
-                                        Priority::Medium => 1,
-                                        Priority::Low => 2,
-                                    }
-                                };
-                                sort_key(a).cmp(&sort_key(b))
-                            });
-                            if selected >= todos.len() {
+                        }
+                        KeyCode::Down => {
+                            if todo_count > 0 && selected < todo_count - 1 {
+                                selected += 1;
+                            }
+                        }
+                        KeyCode::Char(' ') => {
+                            if todo_count > 0 {
+                                let todo = &todos[selected];
+                                let id = todo.id;
+                                if todo.completed {
+                                    db::mark_incomplete(conn, &id)?;
+                                } else {
+                                    db::mark_completed(conn, &id)?;
+                                }
+                                todos = db::list_tasks(
+                                    conn, None, None, None, None, None, None,
+                                )?;
+                                sort_todos(&mut todos);
+                                if selected >= todos.len() {
+                                    selected = todos.len().saturating_sub(1);
+                                }
+                            }
+                        }
+                        KeyCode::Char('n') => {
+                            state = AppState::AddingTask {
+                                input: String::new(),
+                            };
+                        }
+                        _ => {}
+                    },
+                    AppState::AddingTask { input } => match key.code {
+                        KeyCode::Esc => {
+                            state = AppState::Main;
+                        }
+                        KeyCode::Enter => {
+                            if !input.is_empty() {
+                                db::add_task(conn, input, Priority::Medium, None)?;
+                                todos = db::list_tasks(
+                                    conn, None, None, None, None, None, None,
+                                )?;
+                                sort_todos(&mut todos);
                                 selected = todos.len().saturating_sub(1);
                             }
+                            state = AppState::Main;
                         }
-                    }
-                    _ => {}
+                        KeyCode::Char(c) => {
+                            input.push(c);
+                        }
+                        KeyCode::Backspace => {
+                            input.pop();
+                        }
+                        _ => {}
+                    },
                 }
             }
         }
