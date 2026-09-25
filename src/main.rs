@@ -8,6 +8,7 @@ use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
+    text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
     Terminal,
 };
@@ -22,6 +23,8 @@ mod todo;
 enum AppState {
     Main,
     AddingTask { input: String },
+    ConfirmDelete { id: i64, text: String },
+    EditTask { id: i64, input: String },
 }
 
 fn centered_rect(percent_x: u16, height: u16, area: Rect) -> Rect {
@@ -60,6 +63,57 @@ fn sort_todos(todos: &mut Vec<crate::todo::Todo>) {
     });
 }
 
+fn build_todo_items(
+    todos: &[crate::todo::Todo],
+    selected: usize,
+    highlight_style: Style,
+    dimmed: bool,
+) -> Vec<ListItem<'_>> {
+    todos
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            let (label, style) = if t.completed {
+                ("[X]".to_string(), Style::default().fg(Color::DarkGray))
+            } else if dimmed {
+                match t.priority {
+                    Priority::High => ("[H]".into(), Style::default().fg(Color::DarkGray)),
+                    Priority::Medium => ("[M]".into(), Style::default().fg(Color::DarkGray)),
+                    Priority::Low => ("[L]".into(), Style::default().fg(Color::DarkGray)),
+                }
+            } else {
+                match t.priority {
+                    Priority::High => ("[H]".into(), Style::default().fg(Color::Red)),
+                    Priority::Medium => ("[M]".into(), Style::default().fg(Color::Yellow)),
+                    Priority::Low => ("[L]".into(), Style::default().fg(Color::Green)),
+                }
+            };
+
+            let left_text = format!("{} {}", label, t.text);
+            let due_display = t
+                .due_date
+                .as_ref()
+                .map(|d| format!("Due: {}", d))
+                .unwrap_or_default();
+            let gap = if due_display.is_empty() { "" } else { "  " };
+            let due_style = Style::default().fg(Color::DarkGray);
+
+            let item_style = if i == selected {
+                highlight_style
+            } else {
+                style
+            };
+
+            let line = Line::from(vec![
+                Span::styled(left_text, item_style),
+                Span::raw(gap),
+                Span::styled(due_display, due_style),
+            ]);
+            ListItem::new(line)
+        })
+        .collect()
+}
+
 fn run_ui(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
     let mut todos = db::list_tasks(conn, None, None, None, None, None, None)?;
     sort_todos(&mut todos);
@@ -91,37 +145,7 @@ fn run_ui(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD);
 
-                    let items: Vec<ListItem> = todos
-                        .iter()
-                        .enumerate()
-                        .map(|(i, t)| {
-                            let (label, style) = if t.completed {
-                                ("[X]".to_string(), Style::default().fg(Color::DarkGray))
-                            } else {
-                                match t.priority {
-                                    Priority::High => (
-                                        format!("[H]"),
-                                        Style::default().fg(Color::Red),
-                                    ),
-                                    Priority::Medium => (
-                                        format!("[M]"),
-                                        Style::default().fg(Color::Yellow),
-                                    ),
-                                    Priority::Low => (
-                                        format!("[L]"),
-                                        Style::default().fg(Color::Green),
-                                    ),
-                                }
-                            };
-                            let line = format!("{} {}", label, t.text);
-                            let item_style = if i == selected {
-                                highlight_style
-                            } else {
-                                style
-                            };
-                            ListItem::new(line).style(item_style)
-                        })
-                        .collect();
+                    let items = build_todo_items(&todos, selected, highlight_style, false);
 
                     let list = List::new(items)
                         .block(block)
@@ -134,7 +158,7 @@ fn run_ui(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
                         width: area.width.saturating_sub(2),
                         height: 1,
                     };
-                    let footer = Paragraph::new("↑↓ navigate | SPACE toggle | n new | q quit")
+                    let footer = Paragraph::new("↑↓ navigate | SPACE toggle | n new | d delete | e edit | q quit")
                         .style(Style::default().fg(Color::DarkGray))
                         .alignment(ratatui::layout::Alignment::Center);
                     f.render_widget(footer, footer_area);
@@ -150,37 +174,7 @@ fn run_ui(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD);
 
-                    let items: Vec<ListItem> = todos
-                        .iter()
-                        .enumerate()
-                        .map(|(i, t)| {
-                            let (label, style) = if t.completed {
-                                ("[X]".to_string(), Style::default().fg(Color::DarkGray))
-                            } else {
-                                match t.priority {
-                                    Priority::High => (
-                                        format!("[H]"),
-                                        Style::default().fg(Color::DarkGray),
-                                    ),
-                                    Priority::Medium => (
-                                        format!("[M]"),
-                                        Style::default().fg(Color::DarkGray),
-                                    ),
-                                    Priority::Low => (
-                                        format!("[L]"),
-                                        Style::default().fg(Color::DarkGray),
-                                    ),
-                                }
-                            };
-                            let line = format!("{} {}", label, t.text);
-                            let item_style = if i == selected {
-                                highlight_style
-                            } else {
-                                style
-                            };
-                            ListItem::new(line).style(item_style)
-                        })
-                        .collect();
+                    let items = build_todo_items(&todos, selected, highlight_style, true);
 
                     let list = List::new(items)
                         .block(block)
@@ -207,6 +201,90 @@ fn run_ui(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
                     };
                     let footer =
                         Paragraph::new("Type your task | ENTER confirm | ESC cancel")
+                            .style(Style::default().fg(Color::DarkGray))
+                            .alignment(ratatui::layout::Alignment::Center);
+                    f.render_widget(footer, footer_area);
+                }
+                AppState::ConfirmDelete { id: _, text } => {
+                    let block = Block::default()
+                        .title("Todo List")
+                        .borders(Borders::ALL)
+                        .style(Style::default().fg(Color::DarkGray));
+
+                    let highlight_style = Style::default()
+                        .bg(Color::Rgb(40, 40, 60))
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD);
+
+                    let items = build_todo_items(&todos, selected, highlight_style, true);
+
+                    let list = List::new(items)
+                        .block(block)
+                        .highlight_style(highlight_style);
+                    f.render_widget(list, area);
+
+                    let popup = centered_rect(60, 3, area);
+                    f.render_widget(Clear, popup);
+
+                    let popup_block = Block::default()
+                        .title("Delete Task")
+                        .borders(Borders::ALL)
+                        .style(Style::default().fg(Color::Red));
+                    let msg = format!("Delete \"{}\"?", text);
+                    let confirm_paragraph =
+                        Paragraph::new(msg).block(popup_block);
+                    f.render_widget(confirm_paragraph, popup);
+
+                    let footer_area = Rect {
+                        x: area.x + 1,
+                        y: area.y + area.height.saturating_sub(2),
+                        width: area.width.saturating_sub(2),
+                        height: 1,
+                    };
+                    let footer =
+                        Paragraph::new("y confirm | n/Esc cancel")
+                            .style(Style::default().fg(Color::DarkGray))
+                            .alignment(ratatui::layout::Alignment::Center);
+                    f.render_widget(footer, footer_area);
+                }
+                AppState::EditTask { id: _, input } => {
+                    let block = Block::default()
+                        .title("Todo List")
+                        .borders(Borders::ALL)
+                        .style(Style::default().fg(Color::DarkGray));
+
+                    let highlight_style = Style::default()
+                        .bg(Color::Rgb(40, 40, 60))
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD);
+
+                    let items = build_todo_items(&todos, selected, highlight_style, true);
+
+                    let list = List::new(items)
+                        .block(block)
+                        .highlight_style(highlight_style);
+                    f.render_widget(list, area);
+
+                    let popup = centered_rect(60, 3, area);
+                    f.render_widget(Clear, popup);
+
+                    let popup_block = Block::default()
+                        .title("Edit Task")
+                        .borders(Borders::ALL)
+                        .style(Style::default().fg(Color::Yellow));
+                    let input_display = format!("{}▌", input);
+                    let input_paragraph =
+                        Paragraph::new(input_display).block(popup_block);
+                    f.render_widget(input_paragraph, popup);
+
+                    let footer_area = Rect {
+                        x: area.x + 1,
+                        y: area.y + area.height.saturating_sub(2),
+                        width: area.width.saturating_sub(2),
+                        height: 1,
+                    };
+                    let footer =
+                        Paragraph::new("ENTER confirm | ESC cancel")
                             .style(Style::default().fg(Color::DarkGray))
                             .alignment(ratatui::layout::Alignment::Center);
                     f.render_widget(footer, footer_area);
@@ -252,6 +330,24 @@ fn run_ui(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
                                 input: String::new(),
                             };
                         }
+                        KeyCode::Char('d') => {
+                            if todo_count > 0 {
+                                let todo = &todos[selected];
+                                state = AppState::ConfirmDelete {
+                                    id: todo.id,
+                                    text: todo.text.clone(),
+                                };
+                            }
+                        }
+                        KeyCode::Char('e') => {
+                            if todo_count > 0 {
+                                let todo = &todos[selected];
+                                state = AppState::EditTask {
+                                    id: todo.id,
+                                    input: todo.text.clone(),
+                                };
+                            }
+                        }
                         _ => {}
                     },
                     AppState::AddingTask { input } => match key.code {
@@ -266,6 +362,45 @@ fn run_ui(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
                                 )?;
                                 sort_todos(&mut todos);
                                 selected = todos.len().saturating_sub(1);
+                            }
+                            state = AppState::Main;
+                        }
+                        KeyCode::Char(c) => {
+                            input.push(c);
+                        }
+                        KeyCode::Backspace => {
+                            input.pop();
+                        }
+                        _ => {}
+                    },
+                    AppState::ConfirmDelete { id, text: _ } => match key.code {
+                        KeyCode::Char('y') => {
+                            db::delete_task(conn, id)?;
+                            todos = db::list_tasks(
+                                conn, None, None, None, None, None, None,
+                            )?;
+                            sort_todos(&mut todos);
+                            if selected >= todos.len() {
+                                selected = todos.len().saturating_sub(1);
+                            }
+                            state = AppState::Main;
+                        }
+                        KeyCode::Char('n') | KeyCode::Esc => {
+                            state = AppState::Main;
+                        }
+                        _ => {}
+                    },
+                    AppState::EditTask { id, input } => match key.code {
+                        KeyCode::Esc => {
+                            state = AppState::Main;
+                        }
+                        KeyCode::Enter => {
+                            if !input.is_empty() {
+                                db::update_task_text(conn, id, input)?;
+                                todos = db::list_tasks(
+                                    conn, None, None, None, None, None, None,
+                                )?;
+                                sort_todos(&mut todos);
                             }
                             state = AppState::Main;
                         }

@@ -61,6 +61,11 @@ pub fn mark_incomplete(conn: &Connection, id: &i64) -> Result<()> {
     Ok(())
 }
 
+pub fn update_task_text(conn: &Connection, id: &i64, new_text: &str) -> Result<()> {
+    conn.execute("UPDATE todos SET text = ?1 WHERE id = ?2", [new_text, &id.to_string()])?;
+    Ok(())
+}
+
 pub fn list_tasks(
     conn: &Connection,
     completed: Option<bool>,
