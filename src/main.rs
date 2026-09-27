@@ -25,6 +25,70 @@ enum AppState {
     AddingTask { input: String },
     ConfirmDelete { id: i64, text: String },
     EditTask { id: i64, input: String },
+    FilterMenu { selected: usize },
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum TodoFilter {
+    All,
+    Pending,
+    Completed,
+    Low,
+    Medium,
+    High,
+}
+
+impl TodoFilter {
+    fn completed(self) -> Option<bool> {
+        match self {
+            TodoFilter::All => None,
+            TodoFilter::Pending => Some(false),
+            TodoFilter::Completed => Some(true),
+            TodoFilter::Low | TodoFilter::Medium | TodoFilter::High => Some(false),
+        }
+    }
+
+    fn priority(self) -> Option<Priority> {
+        match self {
+            TodoFilter::Low => Some(Priority::Low),
+            TodoFilter::Medium => Some(Priority::Medium),
+            TodoFilter::High => Some(Priority::High),
+            TodoFilter::All | TodoFilter::Pending | TodoFilter::Completed => None,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            TodoFilter::All => "All",
+            TodoFilter::Pending => "Pending",
+            TodoFilter::Completed => "Completed",
+            TodoFilter::Low => "Low",
+            TodoFilter::Medium => "Medium",
+            TodoFilter::High => "High",
+        }
+    }
+
+    fn index(self) -> usize {
+        match self {
+            TodoFilter::All => 0,
+            TodoFilter::Pending => 1,
+            TodoFilter::Completed => 2,
+            TodoFilter::Low => 3,
+            TodoFilter::Medium => 4,
+            TodoFilter::High => 5,
+        }
+    }
+
+    fn from_index(i: usize) -> TodoFilter {
+        match i {
+            1 => TodoFilter::Pending,
+            2 => TodoFilter::Completed,
+            3 => TodoFilter::Low,
+            4 => TodoFilter::Medium,
+            5 => TodoFilter::High,
+            _ => TodoFilter::All,
+        }
+    }
 }
 
 fn centered_rect(percent_x: u16, height: u16, area: Rect) -> Rect {
@@ -61,6 +125,12 @@ fn sort_todos(todos: &mut Vec<crate::todo::Todo>) {
         };
         sort_key(a).cmp(&sort_key(b))
     });
+}
+
+fn load_todos(conn: &Connection, filter: TodoFilter) -> rusqlite::Result<Vec<crate::todo::Todo>> {
+    let mut todos = db::list_tasks(conn, filter.completed(), filter.priority(), None, None, None, None)?;
+    sort_todos(&mut todos);
+    Ok(todos)
 }
 
 fn build_todo_items(
@@ -115,9 +185,8 @@ fn build_todo_items(
 }
 
 fn run_ui(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
-    let mut todos = db::list_tasks(conn, None, None, None, None, None, None)?;
-    sort_todos(&mut todos);
-
+    let mut filter = TodoFilter::All;
+    let mut todos = load_todos(conn, filter)?;
     let mut selected: usize = 0;
     let mut state = AppState::Main;
 
@@ -136,7 +205,7 @@ fn run_ui(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
             match &state {
                 AppState::Main => {
                     let block = Block::default()
-                        .title("Todo List")
+                        .title(format!("Todo List ({})", filter.label()))
                         .borders(Borders::ALL)
                         .style(Style::default().fg(Color::White));
 
@@ -158,7 +227,7 @@ fn run_ui(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
                         width: area.width.saturating_sub(2),
                         height: 1,
                     };
-                    let footer = Paragraph::new("↑↓ navigate | SPACE toggle | n new | d delete | e edit | q quit")
+                    let footer = Paragraph::new("↑↓ navigate | SPACE toggle | n new | d delete | e edit | f filter | q quit")
                         .style(Style::default().fg(Color::DarkGray))
                         .alignment(ratatui::layout::Alignment::Center);
                     f.render_widget(footer, footer_area);
@@ -289,6 +358,78 @@ fn run_ui(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
                             .alignment(ratatui::layout::Alignment::Center);
                     f.render_widget(footer, footer_area);
                 }
+                AppState::FilterMenu { selected: filter_sel } => {
+                    let block = Block::default()
+                        .title("Todo List")
+                        .borders(Borders::ALL)
+                        .style(Style::default().fg(Color::DarkGray));
+
+                    let highlight_style = Style::default()
+                        .bg(Color::Rgb(40, 40, 60))
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD);
+
+                    let items = build_todo_items(&todos, selected, highlight_style, true);
+
+                    let list = List::new(items)
+                        .block(block)
+                        .highlight_style(highlight_style);
+                    f.render_widget(list, area);
+
+                    let popup = centered_rect(40, 8, area);
+                    f.render_widget(Clear, popup);
+
+                    let popup_block = Block::default()
+                        .title("Filter")
+                        .borders(Borders::ALL)
+                        .style(Style::default().fg(Color::Cyan));
+                    f.render_widget(popup_block, popup);
+
+                    let option_area = Rect {
+                        x: popup.x + 1,
+                        y: popup.y + 1,
+                        width: popup.width.saturating_sub(2),
+                        height: 6,
+                    };
+                    let options = ["All", "Pending", "Completed", "Low", "Medium", "High"];
+                    let option_lines: Vec<Line> = options
+                        .iter()
+                        .enumerate()
+                        .map(|(i, opt)| {
+                            if i == *filter_sel {
+                                Line::from(Span::styled(
+                                    format!("> {}", opt),
+                                    highlight_style,
+                                ))
+                            } else {
+                                let color = match i {
+                                    3 => Color::Green,
+                                    4 => Color::Yellow,
+                                    5 => Color::Red,
+                                    _ => Color::White,
+                                };
+                                Line::from(Span::styled(
+                                    format!("  {}", opt),
+                                    Style::default().fg(color),
+                                ))
+                            }
+                        })
+                        .collect();
+                    let option_list = Paragraph::new(option_lines);
+                    f.render_widget(option_list, option_area);
+
+                    let footer_area = Rect {
+                        x: area.x + 1,
+                        y: area.y + area.height.saturating_sub(2),
+                        width: area.width.saturating_sub(2),
+                        height: 1,
+                    };
+                    let footer =
+                        Paragraph::new("↑↓ navigate | ENTER select | ESC cancel")
+                            .style(Style::default().fg(Color::DarkGray))
+                            .alignment(ratatui::layout::Alignment::Center);
+                    f.render_widget(footer, footer_area);
+                }
             }
         })?;
 
@@ -316,10 +457,7 @@ fn run_ui(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
                                 } else {
                                     db::mark_completed(conn, &id)?;
                                 }
-                                todos = db::list_tasks(
-                                    conn, None, None, None, None, None, None,
-                                )?;
-                                sort_todos(&mut todos);
+                                todos = load_todos(conn, filter)?;
                                 if selected >= todos.len() {
                                     selected = todos.len().saturating_sub(1);
                                 }
@@ -348,6 +486,11 @@ fn run_ui(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
                                 };
                             }
                         }
+                        KeyCode::Char('f') => {
+                            state = AppState::FilterMenu {
+                                selected: filter.index(),
+                            };
+                        }
                         _ => {}
                     },
                     AppState::AddingTask { input } => match key.code {
@@ -357,10 +500,7 @@ fn run_ui(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
                         KeyCode::Enter => {
                             if !input.is_empty() {
                                 db::add_task(conn, input, Priority::Medium, None)?;
-                                todos = db::list_tasks(
-                                    conn, None, None, None, None, None, None,
-                                )?;
-                                sort_todos(&mut todos);
+                                todos = load_todos(conn, filter)?;
                                 selected = todos.len().saturating_sub(1);
                             }
                             state = AppState::Main;
@@ -376,10 +516,7 @@ fn run_ui(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
                     AppState::ConfirmDelete { id, text: _ } => match key.code {
                         KeyCode::Char('y') => {
                             db::delete_task(conn, id)?;
-                            todos = db::list_tasks(
-                                conn, None, None, None, None, None, None,
-                            )?;
-                            sort_todos(&mut todos);
+                            todos = load_todos(conn, filter)?;
                             if selected >= todos.len() {
                                 selected = todos.len().saturating_sub(1);
                             }
@@ -397,10 +534,7 @@ fn run_ui(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
                         KeyCode::Enter => {
                             if !input.is_empty() {
                                 db::update_task_text(conn, id, input)?;
-                                todos = db::list_tasks(
-                                    conn, None, None, None, None, None, None,
-                                )?;
-                                sort_todos(&mut todos);
+                                todos = load_todos(conn, filter)?;
                             }
                             state = AppState::Main;
                         }
@@ -409,6 +543,26 @@ fn run_ui(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
                         }
                         KeyCode::Backspace => {
                             input.pop();
+                        }
+                        _ => {}
+                    },
+                    AppState::FilterMenu { selected: filter_sel } => match key.code {
+                        KeyCode::Up => {
+                            *filter_sel = filter_sel.saturating_sub(1);
+                        }
+                        KeyCode::Down => {
+                            if *filter_sel < 5 {
+                                *filter_sel += 1;
+                            }
+                        }
+                        KeyCode::Enter => {
+                            filter = TodoFilter::from_index(*filter_sel);
+                            todos = load_todos(conn, filter)?;
+                            selected = 0;
+                            state = AppState::Main;
+                        }
+                        KeyCode::Esc => {
+                            state = AppState::Main;
                         }
                         _ => {}
                     },
